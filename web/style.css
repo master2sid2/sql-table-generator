@@ -13,6 +13,8 @@
   --accent-soft: rgba(15, 143, 134, .12);
   --key: #b7791f;
   --key-soft: rgba(183, 121, 31, .14);
+  --fk: #6a4fd1;
+  --fk-soft: rgba(106, 79, 209, .13);
   --danger: #c43d4b;
   --danger-soft: rgba(196, 61, 75, .1);
   --warn-bg: #fff6e0;
@@ -47,6 +49,8 @@
     --accent-soft: rgba(43, 193, 178, .14);
     --key: #e6b45a;
     --key-soft: rgba(230, 180, 90, .14);
+    --fk: #b29dff;
+    --fk-soft: rgba(178, 157, 255, .15);
     --danger: #f06b78;
     --danger-soft: rgba(240, 107, 120, .12);
     --warn-bg: #2b2412;
@@ -103,13 +107,43 @@ main {
   padding: 16px 20px 24px;
 }
 
+/* --split is the share of the preview, set by dragging the splitter */
 .outputs {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, var(--split, 40%)) 16px minmax(0, 1fr);
   align-items: start;
 }
-@media (max-width: 1180px) { .outputs { grid-template-columns: minmax(0, 1fr); } }
+.splitter {
+  align-self: stretch;
+  position: relative;
+  min-height: 60px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+/* a short grip at rest that grows into a full line on hover */
+.splitter::before {
+  content: "";
+  position: absolute;
+  top: 40px;
+  left: 7px;
+  width: 2px;
+  height: 36px;
+  border-radius: 2px;
+  background: var(--line-strong);
+  transition: background .15s, top .15s, height .15s;
+}
+.splitter:hover::before, .splitter:focus-visible::before, .splitter.dragging::before {
+  top: 10px;
+  height: calc(100% - 20px);
+  background: var(--accent);
+}
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .output { pointer-events: none; }
+@media (max-width: 1180px) {
+  .outputs { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .splitter { display: none; }
+}
 
 .panel {
   background: var(--panel);
@@ -417,6 +451,12 @@ th:hover .ctl button, tr:hover > .rownum .ctl button { visibility: visible; }
 .row3 .num { width: 74px; flex: none; }
 .f[hidden] { display: none; }
 .flags { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.fk { margin: 0; padding: 8px 0 0; border: 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.fk-body { display: flex; flex-direction: column; gap: 8px; }
+.fk-body[hidden], .fk-multi[hidden] { display: none; }
+.row3 .col { width: 100px; flex: none; }
+.fk-multi { font-family: var(--mono); font-size: 11.5px; white-space: pre-line; }
+.chip .badge.fk { background: var(--fk-soft); color: var(--fk); }
 .pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pop-foot .dim { font-family: var(--mono); font-size: 12px; }
 

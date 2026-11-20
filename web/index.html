@@ -67,6 +67,11 @@
       <pre class="output" id="preview"></pre>
     </section>
 
+    <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Width of the preview and the SQL" aria-valuemin="0" aria-valuemax="100" aria-valuenow="40"
+         title="Drag to resize · double-click to reset"></div>
+
+
     <section class="panel">
       <div class="toolbar">
                 <label class="field">
@@ -145,6 +150,34 @@
     <label class="check"><input type="checkbox" id="pc-nn"> NOT NULL</label>
     <label class="check"><input type="checkbox" id="pc-uq"> Unique</label>
   </div>
+  <fieldset class="fk">
+    <label class="check"><input type="checkbox" id="pc-fk"> Foreign key — references another table</label>
+    <div class="fk-body" id="pc-fk-body" hidden>
+      <div class="row3">
+        <label class="f grow">Table <input id="pc-fk-table" spellcheck="false" autocomplete="off" placeholder="customers"></label>
+        <label class="f col">Column <input id="pc-fk-col" spellcheck="false" autocomplete="off" placeholder="id"></label>
+      </div>
+      <div class="row3">
+        <label class="f grow">ON DELETE <select id="pc-fk-del">
+          <option value="">—</option>
+          <option>CASCADE</option>
+          <option>SET NULL</option>
+          <option>SET DEFAULT</option>
+          <option>RESTRICT</option>
+          <option>NO ACTION</option>
+        </select></label>
+        <label class="f grow">ON UPDATE <select id="pc-fk-upd">
+          <option value="">—</option>
+          <option>CASCADE</option>
+          <option>SET NULL</option>
+          <option>SET DEFAULT</option>
+          <option>RESTRICT</option>
+          <option>NO ACTION</option>
+        </select></label>
+      </div>
+    </div>
+    <div class="dim fk-multi" id="pc-fk-multi" hidden></div>
+  </fieldset>
   <label class="f">Default
     <input id="pc-def" spellcheck="false" autocomplete="off" placeholder="none · 0 · text · CURRENT_TIMESTAMP">
   </label>

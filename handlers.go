@@ -14,9 +14,10 @@ import (
 const maxBody = 20 << 20 // 20 MiB
 
 type generateRequest struct {
-	Table   table.Table     `json:"table"`
-	Columns []sqlgen.Column `json:"columns"`
-	Options sqlgen.Options  `json:"options"`
+	Table       table.Table         `json:"table"`
+	Columns     []sqlgen.Column     `json:"columns"`
+	ForeignKeys []sqlgen.ForeignKey `json:"foreignKeys"` // multi-column ones
+	Options     sqlgen.Options      `json:"options"`
 }
 
 type generateResponse struct {
@@ -35,12 +36,13 @@ type parseRequest struct {
 
 type parseResponse struct {
 	table.Table
-	Format    string          `json:"format"`
-	HasHeader bool            `json:"hasHeader"` // false: headers are generated, all lines are in rows
-	Columns   []sqlgen.Column `json:"columns,omitempty"`
-	TableName string          `json:"tableName,omitempty"`
-	Dialect   string          `json:"dialect,omitempty"`
-	Notes     []string        `json:"notes,omitempty"`
+	Format      string              `json:"format"`
+	HasHeader   bool                `json:"hasHeader"` // false: headers are generated, all lines are in rows
+	Columns     []sqlgen.Column     `json:"columns,omitempty"`
+	ForeignKeys []sqlgen.ForeignKey `json:"foreignKeys,omitempty"`
+	TableName   string              `json:"tableName,omitempty"`
+	Dialect     string              `json:"dialect,omitempty"`
+	Notes       []string            `json:"notes,omitempty"`
 }
 
 func handleGenerate(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +51,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := sqlgen.Prepare(req.Table.Headers, req.Table.Rows, req.Columns)
+	p.ForeignKeys = req.ForeignKeys
 	sql, warnings := sqlgen.Generate(p, req.Options)
 
 	cols, idx := p.Kept()
@@ -114,13 +117,14 @@ func respondParsed(w http.ResponseWriter, text, format string, header bool, file
 			return
 		}
 		writeJSON(w, http.StatusOK, parseResponse{
-			Table:     table.Table{Headers: imp.Headers, Rows: imp.Rows},
-			Format:    "sql",
-			HasHeader: true,
-			Columns:   imp.Columns,
-			TableName: imp.Table,
-			Dialect:   imp.Dialect,
-			Notes:     imp.Notes,
+			Table:       table.Table{Headers: imp.Headers, Rows: imp.Rows},
+			Format:      "sql",
+			HasHeader:   true,
+			Columns:     imp.Columns,
+			ForeignKeys: imp.ForeignKeys,
+			TableName:   imp.Table,
+			Dialect:     imp.Dialect,
+			Notes:       imp.Notes,
 		})
 		return
 	}

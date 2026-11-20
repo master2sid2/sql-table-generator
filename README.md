@@ -68,7 +68,12 @@ Then open the address in a browser.
   inferred from the data (`INT`, `BIGINT`, `DECIMAL(p,s)`, `BOOLEAN`, `DATE`,
   `DATETIME`, `UUID`, `JSON`, `VARCHAR(n)` …) until you set one. Click it (or
   press `F4`) to set the type, length, primary key, auto increment,
-  `NOT NULL`, unique, default and comment.
+  `NOT NULL`, unique, default, comment and a **foreign key**: the table and
+  column it references (`customer_id` suggests `customers`) with
+  `ON DELETE` / `ON UPDATE` actions. It becomes
+  `CONSTRAINT fk_orders_customer_id FOREIGN KEY (customer_id) REFERENCES customers (id)`;
+  SQL Server gets `NO ACTION` for `RESTRICT`, which it does not have, and
+  SQLite a reminder that it checks keys only after `PRAGMA foreign_keys = ON`.
 - **SQL for four dialects**, switched with one list: types, identity columns,
   quoting and literals follow the database:
 
@@ -88,15 +93,19 @@ Then open the address in a browser.
   identity column without values is left to the database. Things a dialect
   cannot express come out as warnings above the SQL.
 - **Preview**: the data as the `mysql` client prints it, or the structure as
-  `DESCRIBE` shows it.
+  `DESCRIBE` shows it (with a `References` column for foreign keys). Drag the
+  line between the preview and the SQL to share the width differently
+  (double-click resets it); the share is remembered.
 - **SQL → table**: paste SQL into the grid or into *Import SQL…*, or open or
   drop a `.sql` file. Understood: `CREATE TABLE` with column and table
   constraints, `INSERT` / `REPLACE` (with or without a column list, without
   semicolons as SSMS writes them), PostgreSQL `COPY … FROM stdin`, and the
-  `ALTER TABLE … ADD PRIMARY KEY / MODIFY / SET DEFAULT` and `COMMENT ON
-  COLUMN` statements dumps keep keys and comments in. When a script has
-  several tables, the first one is loaded. Foreign keys, indexes and checks
-  are skipped.
+  `ALTER TABLE … ADD PRIMARY KEY / FOREIGN KEY / MODIFY / SET DEFAULT` and
+  `COMMENT ON COLUMN` statements dumps keep keys and comments in. Foreign
+  keys are read in every form (inline `REFERENCES`, table constraints,
+  pg_dump's and SSMS's `ALTER TABLE`); keys over several columns are kept and
+  written back, though the editor does not edit them. When a script has
+  several tables, the first one is loaded; indexes and checks are skipped.
 - **Other input**: CSV, TSV (`,` `;` `Tab` `|` detected; UTF-8, UTF-16 or
   Windows-1251), `mysql` client tables, `\G` output, and `DESCRIBE` / psql
   `\d` output, which becomes the column definitions.
@@ -122,7 +131,9 @@ The web page uses a small JSON API, which can be used directly:
 A column: `type` (empty for inferred, or `int`, `bigint`, `smallint`,
 `decimal`, `float`, `bool`, `varchar`, `char`, `text`, `date`, `time`,
 `datetime`, `json`, `uuid`, `blob`), `length`, `scale`, `pk`, `ai`,
-`notNull`, `unique`, `default`, `comment`.
+`notNull`, `unique`, `default`, `comment`, `ref` (a foreign key:
+`{"table","column","onDelete","onUpdate","name"}`). Keys over several columns
+go in `foreignKeys`: `[{"columns":[],"table","refColumns":[],"onDelete","onUpdate","name"}]`.
 
 `options`: `dialect` (`mysql`, `postgres`, `sqlite`, `mssql`), `table`,
 `create`, `drop`, `insert`, `insertMode` (`multi`, `single`), `quoteAll`,

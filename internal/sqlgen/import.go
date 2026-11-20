@@ -18,8 +18,10 @@ type Imported struct {
 	Headers []string   `json:"headers"`
 	Rows    [][]string `json:"rows"`
 	Columns []Column   `json:"columns"`
-	Dialect string     `json:"dialect,omitempty"` // the dialect the script looks like
-	Notes   []string   `json:"notes,omitempty"`
+	// ForeignKeys are the multi-column foreign keys; single-column ones are in Columns.
+	ForeignKeys []ForeignKey `json:"foreignKeys,omitempty"`
+	Dialect     string       `json:"dialect,omitempty"` // the dialect the script looks like
+	Notes       []string     `json:"notes,omitempty"`
 }
 
 var (
@@ -67,6 +69,7 @@ type tableDef struct {
 	names    []string
 	cols     []Column
 	rows     [][]string
+	fks      []ForeignKey // multi-column foreign keys
 	notes    []string
 }
 
@@ -176,12 +179,13 @@ func Import(src string) (*Imported, error) {
 			len(names), strings.Join(names, ", "), pick.name)}, notes...)
 	}
 	res := &Imported{
-		Table:   pick.name,
-		Headers: pick.names,
-		Columns: pick.cols,
-		Rows:    make([][]string, len(pick.rows)),
-		Dialect: dialect,
-		Notes:   notes,
+		Table:       pick.name,
+		Headers:     pick.names,
+		Columns:     pick.cols,
+		ForeignKeys: pick.fks,
+		Rows:        make([][]string, len(pick.rows)),
+		Dialect:     dialect,
+		Notes:       notes,
 	}
 	for i, r := range pick.rows {
 		row := make([]string, len(pick.names))
@@ -247,6 +251,7 @@ func (im *importer) columnDef(td *tableDef, c *cursor) {
 }
 
 func modifiers(td *tableDef, c *cursor, col *Column) {
+	constraint := "" // the name of CONSTRAINT name REFERENCES ...
 	for !c.done() {
 		t := c.next()
 		if t.kind != tkWord {
@@ -296,24 +301,30 @@ func modifiers(td *tableDef, c *cursor, col *Column) {
 			c.accept("SET")
 			c.next()
 		case "REFERENCES":
-			c.qname()
-			c.group()
+			table, cols := reference(c)
+			if table != "" {
+				col.Ref = Reference{Name: constraint, Table: table, Column: first(cols)}
+				referenceActions(c, &col.Ref.OnDelete, &col.Ref.OnUpdate)
+			}
 		case "CHECK":
 			c.group()
 		case "ON": // ON UPDATE CURRENT_TIMESTAMP, ON DELETE CASCADE, ON CONFLICT ...
 			c.next()
 		case "CONSTRAINT":
-			c.name()
+			constraint, _ = c.name()
+			continue
 		}
+		constraint = "" // a name belongs to the constraint right after it
 	}
 }
 
 // constraint reads a table constraint: PRIMARY KEY (a, b), UNIQUE (a), and
 // SQL Server's DEFAULT x FOR col. Indexes, foreign keys and checks are skipped.
 func (im *importer) constraint(td *tableDef, c *cursor) {
+	name := ""
 	if c.accept("CONSTRAINT") {
 		if t := c.peek(); t.kind == tkIdent || t.kind == tkWord && !t.is("PRIMARY", "UNIQUE", "FOREIGN", "CHECK", "DEFAULT", "EXCLUDE") {
-			c.next()
+			name = c.next().val
 		}
 	}
 	switch {
@@ -339,9 +350,87 @@ func (im *importer) constraint(td *tableDef, c *cursor) {
 				}
 			}
 		}
-	case c.peek().is("FOREIGN"):
-		td.note("foreign keys are not imported")
+	case c.accept("FOREIGN"):
+		foreignKey(td, c, name)
 	}
+}
+
+// foreignKey reads the rest of FOREIGN KEY [index] (cols) REFERENCES table (cols) actions.
+func foreignKey(td *tableDef, c *cursor, name string) {
+	cols := nameList(c)
+	if !c.accept("REFERENCES") {
+		return
+	}
+	table, refs := reference(c)
+	if table == "" || len(cols) == 0 {
+		return
+	}
+	fk := ForeignKey{Name: name, Columns: cols, Table: table, RefColumns: refs}
+	referenceActions(c, &fk.OnDelete, &fk.OnUpdate)
+	if len(cols) > 1 {
+		td.fks = append(td.fks, fk)
+		return
+	}
+	if i := td.find(cols[0]); i >= 0 {
+		td.cols[i].Ref = Reference{Name: name, Table: table, Column: first(refs), OnDelete: fk.OnDelete, OnUpdate: fk.OnUpdate}
+	}
+}
+
+// reference reads "table (columns)" after REFERENCES. The schema is dropped,
+// as it is for the imported table itself.
+func reference(c *cursor) (string, []string) {
+	parts := c.qname()
+	if len(parts) == 0 {
+		return "", nil
+	}
+	var cols []string
+	if c.peek().isPunct("(") {
+		cols = nameList(c)
+	}
+	return parts[len(parts)-1], cols
+}
+
+// referenceActions reads MATCH ..., ON DELETE action and ON UPDATE action.
+// Anything else, such as MySQL's ON UPDATE CURRENT_TIMESTAMP, is left alone.
+func referenceActions(c *cursor, onDelete, onUpdate *string) {
+	for {
+		if c.accept("MATCH") {
+			c.next()
+			continue
+		}
+		save := c.i
+		if !c.accept("ON") {
+			return
+		}
+		which := c.next()
+		var act string
+		switch {
+		case c.accept("NO", "ACTION"):
+			act = "NO ACTION"
+		case c.accept("SET", "NULL"):
+			act = "SET NULL"
+		case c.accept("SET", "DEFAULT"):
+			act = "SET DEFAULT"
+		case c.peek().is("CASCADE", "RESTRICT"):
+			act = strings.ToUpper(c.next().val)
+		}
+		switch {
+		case act != "" && which.is("DELETE"):
+			*onDelete = act
+		case act != "" && which.is("UPDATE"):
+			*onUpdate = act
+		default:
+			c.i = save
+			return
+		}
+	}
+}
+
+func first(s []string) string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return ""
 }
 
 // nameList reads the column list of a key: skips to "(" and returns the names.
@@ -733,7 +822,7 @@ func (im *importer) alter(c *cursor) {
 	for _, action := range split(c.toks[c.i:]) {
 		a := &cursor{toks: action, src: c.src}
 		switch {
-		case a.accept("ADD"):
+		case a.accept("WITH", "CHECK", "ADD"), a.accept("WITH", "NOCHECK", "ADD"), a.accept("ADD"): // SSMS: WITH CHECK ADD
 			a.accept("COLUMN")
 			if isConstraint(a.peek()) || a.peek().is("DEFAULT") {
 				im.constraint(td, a)

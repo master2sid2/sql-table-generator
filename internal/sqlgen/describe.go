@@ -13,11 +13,34 @@ import (
 func Structure(p *Prepared, d string) table.Table {
 	d = NormDialect(d)
 	cols, _ := p.Kept()
+	// what each column references: its own Ref or its part of a multi-column key
+	refs := make(map[*Effective]string)
+	for _, e := range cols {
+		if e.Ref.Table != "" {
+			refs[e] = refText(e.Ref.Table, e.Ref.Column)
+		}
+	}
+	for _, fk := range p.ForeignKeys {
+		for i, c := range fk.Columns {
+			for _, e := range cols {
+				if strings.EqualFold(e.Name, c) && refs[e] == "" {
+					r := ""
+					if i < len(fk.RefColumns) {
+						r = fk.RefColumns[i]
+					}
+					refs[e] = refText(fk.Table, r)
+				}
+			}
+		}
+	}
 	withComments := false
 	for _, e := range cols {
 		withComments = withComments || e.Comment != ""
 	}
 	t := table.Table{Headers: []string{"Field", "Type", "Null", "Key", "Default", "Extra"}}
+	if len(refs) > 0 {
+		t.Headers = append(t.Headers, "References")
+	}
 	if withComments {
 		t.Headers = append(t.Headers, "Comment")
 	}
@@ -32,6 +55,8 @@ func Structure(p *Prepared, d string) table.Table {
 			key = "PRI"
 		case e.Unique:
 			key = "UNI"
+		case refs[e] != "":
+			key = "MUL" // as MySQL shows a foreign key column
 		}
 		if e.AutoIncrement {
 			ext = extra
@@ -39,6 +64,9 @@ func Structure(p *Prepared, d string) table.Table {
 			def = v
 		}
 		row := []string{e.Name, e.SQLType, null, key, def, ext}
+		if len(refs) > 0 {
+			row = append(row, refs[e])
+		}
 		if withComments {
 			row = append(row, oneLine(e.Comment))
 		}
@@ -48,6 +76,15 @@ func Structure(p *Prepared, d string) table.Table {
 }
 
 var psqlIndexRe = regexp.MustCompile(`(?m)^\s+"[^"]*" (PRIMARY KEY|UNIQUE CONSTRAINT|UNIQUE), \w+ \(([^)]*)\)`)
+
+func refText(table, column string) string {
+	if column == "" {
+		column = "id"
+	}
+	return table + "(" + column + ")"
+}
+
+var refTextRe = regexp.MustCompile(`^\s*([^()\s]+)\s*\(\s*([^()]*?)\s*\)\s*$`)
 
 // FromDescribe recognizes the output of MySQL DESCRIBE (and of Structure) or
 // of psql \d and turns it into column definitions. raw is the text the table
@@ -77,7 +114,7 @@ func FromDescribe(t table.Table, raw string) (names []string, cols []Column, ok 
 	if !mysql && !psql {
 		return nil, nil, false
 	}
-	nullI, defI, commentI := find("null"), find("default"), find("comment")
+	nullI, defI, commentI, refI := find("null"), find("default"), find("comment"), find("references")
 	if psql {
 		nullI = find("nullable")
 	}
@@ -111,6 +148,9 @@ func FromDescribe(t table.Table, raw string) (names []string, cols []Column, ok 
 			col.Default = stripCast(def)
 		}
 		col.Comment = cell(r, commentI)
+		if m := refTextRe.FindStringSubmatch(cell(r, refI)); m != nil {
+			col.Ref = Reference{Table: m[1], Column: m[2]}
+		}
 		names = append(names, name)
 		cols = append(cols, col)
 	}

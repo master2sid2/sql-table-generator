@@ -57,15 +57,36 @@ func isText(t string) bool {
 
 // Column describes a column; its name is the table header.
 type Column struct {
-	Type          string `json:"type"`             // a Type* constant; TypeAuto infers it from the data
-	Length        int    `json:"length,omitempty"` // VARCHAR/CHAR length, DECIMAL precision; 0 = from the data
-	Scale         int    `json:"scale,omitempty"`  // DECIMAL scale
-	NotNull       bool   `json:"notNull,omitempty"`
-	PrimaryKey    bool   `json:"pk,omitempty"`
-	Unique        bool   `json:"unique,omitempty"`
-	AutoIncrement bool   `json:"ai,omitempty"`
-	Default       string `json:"default,omitempty"` // a value, or an expression such as CURRENT_TIMESTAMP
-	Comment       string `json:"comment,omitempty"`
+	Type          string    `json:"type"`             // a Type* constant; TypeAuto infers it from the data
+	Length        int       `json:"length,omitempty"` // VARCHAR/CHAR length, DECIMAL precision; 0 = from the data
+	Scale         int       `json:"scale,omitempty"`  // DECIMAL scale
+	NotNull       bool      `json:"notNull,omitempty"`
+	PrimaryKey    bool      `json:"pk,omitempty"`
+	Unique        bool      `json:"unique,omitempty"`
+	AutoIncrement bool      `json:"ai,omitempty"`
+	Default       string    `json:"default,omitempty"` // a value, or an expression such as CURRENT_TIMESTAMP
+	Comment       string    `json:"comment,omitempty"`
+	Ref           Reference `json:"ref,omitzero"` // a foreign key; Ref.Table == "" means none
+}
+
+// Reference is a foreign key of a single column.
+type Reference struct {
+	Name     string `json:"name,omitempty"`     // constraint name; generated when empty
+	Table    string `json:"table"`              // referenced table, may be schema-qualified
+	Column   string `json:"column,omitempty"`   // referenced column; "" means id
+	OnDelete string `json:"onDelete,omitempty"` // CASCADE, SET NULL, SET DEFAULT, RESTRICT, NO ACTION
+	OnUpdate string `json:"onUpdate,omitempty"`
+}
+
+// ForeignKey is a foreign key over several columns. The editor does not edit
+// them, but they are kept when SQL is imported and generated again.
+type ForeignKey struct {
+	Name       string   `json:"name,omitempty"`
+	Columns    []string `json:"columns"`
+	Table      string   `json:"table"`
+	RefColumns []string `json:"refColumns"`
+	OnDelete   string   `json:"onDelete,omitempty"`
+	OnUpdate   string   `json:"onUpdate,omitempty"`
 }
 
 // Effective is a column the way it goes into the SQL: the name is final, the
@@ -80,9 +101,10 @@ type Effective struct {
 
 // Prepared is a table ready to be turned into SQL.
 type Prepared struct {
-	Columns  []Effective // one per source column; Skip marks the ones left out
-	Rows     [][]string  // rows that are not blank, padded to len(Columns)
-	Warnings []string
+	Columns     []Effective  // one per source column; Skip marks the ones left out
+	Rows        [][]string   // rows that are not blank, padded to len(Columns)
+	ForeignKeys []ForeignKey // multi-column foreign keys
+	Warnings    []string
 }
 
 // Kept returns the columns that go into the SQL with their source positions.
@@ -162,7 +184,8 @@ func (p *Prepared) resolveType(e *Effective, values []string) {
 	if e.Type == TypeAuto {
 		e.Inferred = true
 		e.Type, e.Length, e.Scale = it.typ, it.length, it.scale
-		if e.AutoIncrement && !isInteger(e.Type) {
+		// an empty key column is most likely an integer id
+		if e.AutoIncrement && !isInteger(e.Type) || e.Ref.Table != "" && it.maxLen == 0 {
 			e.Type, e.Length, e.Scale = TypeInt, 0, 0
 		}
 		return

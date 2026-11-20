@@ -76,7 +76,7 @@ func Generate(p *Prepared, o Options) (string, []string) {
 	}
 	if o.Create {
 		sep()
-		g.create(tbl, cols)
+		g.create(name, tbl, cols, p.ForeignKeys)
 	}
 	if o.Insert && len(p.Rows) > 0 {
 		sep()
@@ -87,7 +87,8 @@ func Generate(p *Prepared, o Options) (string, []string) {
 
 /* ---------------- CREATE TABLE ---------------- */
 
-func (g *gen) create(tbl string, cols []*Effective) {
+// create writes CREATE TABLE. name is the table name as given, tbl the quoted one.
+func (g *gen) create(name, tbl string, cols []*Effective, multiFKs []ForeignKey) {
 	var pks []string
 	for _, e := range cols {
 		if e.PrimaryKey {
@@ -163,7 +164,14 @@ func (g *gen) create(tbl string, cols []*Effective) {
 			}
 		}
 	}
+	fks := g.foreignKeys(name, cols, multiFKs)
+	for _, fk := range fks {
+		lines = append(lines, line{name: fk})
+	}
 
+	if g.d == SQLite && len(fks) > 0 {
+		g.b.WriteString("-- SQLite checks foreign keys only after: PRAGMA foreign_keys = ON;\n")
+	}
 	fmt.Fprintf(&g.b, "CREATE TABLE %s (\n", tbl)
 	for i, l := range lines {
 		s := l.name
@@ -188,6 +196,128 @@ func (g *gen) create(tbl string, cols []*Effective) {
 		g.b.WriteString("\n" + strings.Join(pgComments, "\n") + "\n")
 	}
 }
+
+/* ---------------- FOREIGN KEY ---------------- */
+
+var refActions = map[string]bool{"CASCADE": true, "SET NULL": true, "SET DEFAULT": true, "RESTRICT": true, "NO ACTION": true}
+
+// NormAction returns a referential action in its canonical spelling, or ""
+// when it is not one.
+func NormAction(a string) string {
+	a = strings.ToUpper(strings.Join(strings.Fields(a), " "))
+	if refActions[a] {
+		return a
+	}
+	return ""
+}
+
+// foreignKeys returns the FOREIGN KEY constraint lines: one per column with a
+// reference, then the multi-column keys.
+func (g *gen) foreignKeys(table string, cols []*Effective, multi []ForeignKey) []string {
+	find := func(n string) *Effective {
+		for _, e := range cols {
+			if strings.EqualFold(e.Name, n) {
+				return e
+			}
+		}
+		return nil
+	}
+	all := make([]ForeignKey, 0, len(multi))
+	for _, e := range cols {
+		if r := e.Ref; strings.TrimSpace(r.Table) != "" {
+			all = append(all, ForeignKey{Name: r.Name, Columns: []string{e.Name}, Table: r.Table,
+				RefColumns: []string{r.Column}, OnDelete: r.OnDelete, OnUpdate: r.OnUpdate})
+		}
+	}
+	all = append(all, multi...)
+
+	var lines []string
+	for _, fk := range all {
+		label := strings.Join(fk.Columns, ", ")
+		if strings.TrimSpace(fk.Table) == "" || len(fk.Columns) == 0 {
+			continue
+		}
+		refs := append([]string(nil), fk.RefColumns...)
+		if len(refs) == 0 && len(fk.Columns) > 1 {
+			refs = fk.Columns
+		}
+		if len(refs) == 0 {
+			refs = []string{""}
+		}
+		if len(refs) != len(fk.Columns) {
+			g.warn("foreign key (%s): %d columns reference %d, left out", label, len(fk.Columns), len(refs))
+			continue
+		}
+		local := make([]string, len(fk.Columns))
+		ok := true
+		for i, c := range fk.Columns {
+			e := find(c)
+			if e == nil {
+				g.warn("foreign key (%s): there is no column %s, left out", label, c)
+				ok = false
+				break
+			}
+			local[i] = g.ident(e.Name)
+		}
+		if !ok {
+			continue
+		}
+		remote := make([]string, len(refs))
+		for i, r := range refs {
+			if r = strings.TrimSpace(r); r == "" {
+				r = "id"
+			}
+			remote[i] = g.ident(r)
+		}
+		name := fk.Name
+		if name == "" {
+			name = fkName(table, fk.Columns)
+		}
+		s := fmt.Sprintf("CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)",
+			g.ident(name), strings.Join(local, ", "), g.table(strings.TrimSpace(fk.Table)), strings.Join(remote, ", "))
+		for _, act := range []struct{ on, a string }{{"DELETE", fk.OnDelete}, {"UPDATE", fk.OnUpdate}} {
+			if a := g.action(label, act.on, act.a); a != "" {
+				s += " ON " + act.on + " " + a
+			}
+		}
+		lines = append(lines, s)
+	}
+	return lines
+}
+
+// action adapts a referential action to the dialect.
+func (g *gen) action(label, on, a string) string {
+	if strings.TrimSpace(a) == "" {
+		return ""
+	}
+	n := NormAction(a)
+	switch {
+	case n == "":
+		g.warn("foreign key (%s): unknown ON %s action %q, left out", label, on, a)
+	case n == "RESTRICT" && g.d == MSSQL:
+		return "NO ACTION" // SQL Server has no RESTRICT; NO ACTION behaves the same
+	case n == "SET DEFAULT" && g.d == MySQL:
+		g.warn("foreign key (%s): MySQL (InnoDB) rejects ON %s SET DEFAULT", label, on)
+	}
+	return n
+}
+
+// fkName makes a constraint name such as fk_orders_customer_id.
+func fkName(table string, cols []string) string {
+	if i := strings.LastIndex(table, "."); i >= 0 {
+		table = table[i+1:]
+	}
+	if table == "" {
+		table = DefaultTable
+	}
+	s := nonWordRe.ReplaceAllString("fk_"+table+"_"+strings.Join(cols, "_"), "_")
+	if len(s) > 63 { // the PostgreSQL limit; MySQL allows 64
+		s = s[:63]
+	}
+	return s
+}
+
+var nonWordRe = regexp.MustCompile(`[^A-Za-z0-9_]+`)
 
 func pad(s string, w int) string {
 	return s + strings.Repeat(" ", max(0, w-table.DisplayWidth(s)))

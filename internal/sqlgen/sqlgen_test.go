@@ -517,3 +517,128 @@ func TestFromDescribePsql(t *testing.T) {
 		}
 	}
 }
+
+func TestForeignKeys(t *testing.T) {
+	h := []string{"id", "customer_id", "product_id", "variant"}
+	rows := [][]string{{"1", "10", "", ""}}
+	cols := []Column{
+		{PrimaryKey: true, AutoIncrement: true},
+		{NotNull: true, Ref: Reference{Table: "customers", OnDelete: "cascade", OnUpdate: "restrict"}},
+		{Ref: Reference{Name: "my_fk", Table: "shop.products", Column: "sku", OnDelete: "set  null"}},
+	}
+	multi := []ForeignKey{{Columns: []string{"product_id", "variant"}, Table: "variants", RefColumns: []string{"product", "name"}}}
+	want := map[string][]string{
+		MySQL: {
+			"  CONSTRAINT fk_orders_customer_id FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE CASCADE ON UPDATE RESTRICT,\n",
+			"  CONSTRAINT my_fk FOREIGN KEY (product_id) REFERENCES shop.products (sku) ON DELETE SET NULL,\n",
+			"  CONSTRAINT fk_orders_product_id_variant FOREIGN KEY (product_id, variant) REFERENCES variants (product, name)\n) ENGINE",
+		},
+		MSSQL:  {"REFERENCES customers (id) ON DELETE CASCADE ON UPDATE NO ACTION,"}, // no RESTRICT in SQL Server
+		SQLite: {"-- SQLite checks foreign keys only after: PRAGMA foreign_keys = ON;\nCREATE TABLE"},
+	}
+	for d, parts := range want {
+		p := Prepare(h, rows, cols)
+		p.ForeignKeys = multi
+		got, warnings := Generate(p, Options{Dialect: d, Table: "orders", Create: true})
+		for _, w := range parts {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: no %q in\n%s", d, w, got)
+			}
+		}
+		if len(warnings) > 0 {
+			t.Errorf("%s: warnings %q", d, warnings)
+		}
+		if p.Columns[2].Type != TypeInt {
+			t.Errorf("an empty column with a reference is %s, want int", p.Columns[2].Type)
+		}
+	}
+
+	t.Run("problems are warnings", func(t *testing.T) {
+		p := Prepare([]string{"a"}, nil, []Column{{Ref: Reference{Table: "t", OnDelete: "SET DEFAULT", OnUpdate: "explode"}}})
+		p.ForeignKeys = []ForeignKey{
+			{Columns: []string{"a", "gone"}, Table: "t", RefColumns: []string{"x", "y"}},
+			{Columns: []string{"a"}, Table: "t", RefColumns: []string{"x", "y"}},
+		}
+		got, warnings := Generate(p, Options{Dialect: MySQL, Create: true})
+		if strings.Count(got, "FOREIGN KEY") != 1 || len(warnings) != 4 {
+			t.Errorf("got %s\nwarnings %q", got, warnings)
+		}
+	})
+}
+
+func TestImportForeignKeys(t *testing.T) {
+	tests := []struct {
+		name, src string
+		want      Reference
+	}{
+		{"inline, not confused by ON UPDATE CURRENT_TIMESTAMP",
+			"CREATE TABLE o (c int REFERENCES public.customers(id) ON DELETE CASCADE, ts timestamp DEFAULT now() ON UPDATE CURRENT_TIMESTAMP);",
+			Reference{Table: "customers", Column: "id", OnDelete: "CASCADE"}},
+		{"mysqldump",
+			"CREATE TABLE `o` (`c` int, KEY `fk_c` (`c`), CONSTRAINT `fk_c` FOREIGN KEY (`c`) REFERENCES `customers` (`id`) ON DELETE SET NULL ON UPDATE CASCADE) ENGINE=InnoDB;",
+			Reference{Name: "fk_c", Table: "customers", Column: "id", OnDelete: "SET NULL", OnUpdate: "CASCADE"}},
+		{"pg_dump",
+			"CREATE TABLE public.o (c integer);\nALTER TABLE ONLY public.o\n    ADD CONSTRAINT o_c_fkey FOREIGN KEY (c) REFERENCES public.customers(id) MATCH FULL ON DELETE RESTRICT;",
+			Reference{Name: "o_c_fkey", Table: "customers", Column: "id", OnDelete: "RESTRICT"}},
+		{"ssms",
+			"CREATE TABLE [dbo].[o]([c] [int])\nGO\nALTER TABLE [dbo].[o]  WITH CHECK ADD  CONSTRAINT [FK_o_c] FOREIGN KEY([c])\nREFERENCES [dbo].[customers] ([id])\nON DELETE NO ACTION\nGO\nALTER TABLE [dbo].[o] CHECK CONSTRAINT [FK_o_c]\nGO",
+			Reference{Name: "FK_o_c", Table: "customers", Column: "id", OnDelete: "NO ACTION"}},
+		{"sqlite, no referenced column",
+			"CREATE TABLE o (c INTEGER, FOREIGN KEY (c) REFERENCES customers ON UPDATE SET DEFAULT);",
+			Reference{Table: "customers", OnUpdate: "SET DEFAULT"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			imp, err := Import(tt.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := imp.Columns[0].Ref; got != tt.want {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+			if len(imp.ForeignKeys) != 0 || len(imp.Notes) != 0 {
+				t.Errorf("foreign keys %+v, notes %q", imp.ForeignKeys, imp.Notes)
+			}
+		})
+	}
+
+	imp, err := Import("CREATE TABLE o (a int, b int, CONSTRAINT ab FOREIGN KEY (a, b) REFERENCES t (x, y) ON DELETE CASCADE);")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ForeignKey{{Name: "ab", Columns: []string{"a", "b"}, Table: "t", RefColumns: []string{"x", "y"}, OnDelete: "CASCADE"}}
+	if !reflect.DeepEqual(imp.ForeignKeys, want) || imp.Columns[0].Ref.Table != "" {
+		t.Errorf("multi-column key: %+v", imp.ForeignKeys)
+	}
+}
+
+func TestForeignKeyRoundTrip(t *testing.T) {
+	h := []string{"id", "customer_id", "a", "b"}
+	cols := []Column{{PrimaryKey: true}, {Ref: Reference{Table: "customers", OnDelete: "CASCADE"}}}
+	multi := []ForeignKey{{Columns: []string{"a", "b"}, Table: "pairs", RefColumns: []string{"x", "y"}, OnUpdate: "SET NULL"}}
+	for _, d := range []string{MySQL, Postgres, SQLite, MSSQL} {
+		p := Prepare(h, [][]string{{"1", "2", "3", "4"}}, cols)
+		p.ForeignKeys = multi
+		sql, _ := Generate(p, Options{Dialect: d, Table: "orders", Create: true})
+		imp, err := Import(sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantRef := Reference{Name: "fk_orders_customer_id", Table: "customers", Column: "id", OnDelete: "CASCADE"}
+		wantMulti := []ForeignKey{{Name: "fk_orders_a_b", Columns: []string{"a", "b"}, Table: "pairs", RefColumns: []string{"x", "y"}, OnUpdate: "SET NULL"}}
+		if imp.Columns[1].Ref != wantRef || !reflect.DeepEqual(imp.ForeignKeys, wantMulti) {
+			t.Errorf("%s: %+v %+v", d, imp.Columns[1].Ref, imp.ForeignKeys)
+		}
+
+		// the structure preview shows references and reads them back
+		text := table.Render(Structure(p, d), table.Options{Align: table.AlignLeft})
+		if !strings.Contains(text, "| customer_id | INT") && !strings.Contains(text, "| customer_id | INTEGER") {
+			t.Errorf("%s structure:\n%s", d, text)
+		}
+		parsed, _ := table.ParseText(text, table.FormatAuto, true)
+		_, back, ok := FromDescribe(parsed.Table, text)
+		if !ok || back[1].Ref != (Reference{Table: "customers", Column: "id"}) || back[2].Ref != (Reference{Table: "pairs", Column: "x"}) {
+			t.Errorf("%s: describe round trip %+v", d, back)
+		}
+	}
+}
