@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQL Table Generator</title>
+<meta name="description" content="Design a table like a spreadsheet and get CREATE TABLE and INSERT for MySQL, PostgreSQL, SQLite or SQL Server — or paste SQL to get the table back">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f8f86'/%3E%3Cellipse cx='16' cy='9' rx='9' ry='3.5' fill='none' stroke='white' stroke-width='2.4'/%3E%3Cpath d='M7 9v14c0 1.9 4 3.5 9 3.5s9-1.6 9-3.5V9M7 16c0 1.9 4 3.5 9 3.5s9-1.6 9-3.5' fill='none' stroke='white' stroke-width='2.4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">SQL</span>
+    <h1>SQL Table Generator</h1>
+    <span class="tagline">table ⇄ CREATE TABLE + INSERT</span>
+  </div>
+  <div class="hint">
+    edit cells like in Excel · click a <b>type</b> to set the column ·
+    <kbd>Ctrl</kbd>+<kbd>V</kbd> CSV / Excel / MySQL output / <b>SQL</b> ·
+    drop a <b>.csv</b> or <b>.sql</b> onto the page
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="toolbar">
+      <label class="btn primary" title="Open a CSV / TSV / TXT / SQL file">
+        <input type="file" id="file" accept=".csv,.tsv,.txt,.sql,text/csv,text/plain,application/sql" hidden>
+        Open file
+      </label>
+      <button class="btn" data-act="sql-import" title="Paste CREATE TABLE / INSERT / a dump and get the table">Import SQL…</button>
+      <span class="sep"></span>
+      <label class="field">Table
+        <input id="opt-table" class="name-input" spellcheck="false" autocomplete="off" placeholder="my_table">
+      </label>
+      <span class="sep"></span>
+      <button class="btn" data-act="row-add">+ Row</button>
+      <button class="btn" data-act="col-add">+ Column</button>
+      <button class="btn danger" data-act="clear">Clear</button>
+      <span class="sep"></span>
+      <label class="check" title="Used when importing CSV/TSV (a file, or Ctrl+V outside a cell)">
+        <input type="checkbox" id="opt-header" checked> First CSV row is the header
+      </label>
+      <span class="spacer"></span>
+      <span class="status" id="status" role="status"></span>
+      <span class="dim" id="dims"></span>
+    </div>
+    <div class="grid-wrap" id="grid-wrap">
+      <table class="grid" id="grid"></table>
+    </div>
+  </section>
+
+  <div class="outputs">
+    <section class="panel">
+      <div class="toolbar">
+        <span class="title">Preview</span>
+        <div class="seg" role="group" aria-label="Preview mode">
+          <button type="button" data-act="pv-data" aria-pressed="true">Data</button>
+          <button type="button" data-act="pv-struct" aria-pressed="false">Structure</button>
+        </div>
+        <label class="check" title="Empty cells are NULL in the preview and in INSERT"><input type="checkbox" id="opt-null" checked> Empty → NULL</label>
+        <span class="spacer"></span>
+        <button class="btn" data-act="pv-download">.txt</button>
+        <button class="btn" data-act="pv-copy" id="pv-copy">Copy</button>
+      </div>
+      <pre class="output" id="preview"></pre>
+    </section>
+
+    <section class="panel">
+      <div class="toolbar">
+                <label class="field">
+          <select id="opt-dialect" class="dialect" aria-label="SQL dialect">
+            <option value="mysql" title="MySQL and MariaDB">MySQL</option>
+            <option value="postgres">PostgreSQL</option>
+            <option value="sqlite">SQLite</option>
+            <option value="mssql">SQL Server</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="opt-drop"> DROP</label>
+        <label class="check"><input type="checkbox" id="opt-create" checked> CREATE</label>
+        <label class="check"><input type="checkbox" id="opt-insert" checked> INSERT</label>
+        <label class="field">
+          <select id="opt-mode" aria-label="INSERT style">
+            <option value="multi">multi-row INSERT</option>
+            <option value="single">INSERT per row</option>
+          </select>
+        </label>
+        <label class="check" title="Quote every identifier, not only reserved words and unusual names"><input type="checkbox" id="opt-quote"> Quote all</label>
+        <span class="spacer"></span>
+        <button class="btn" data-act="sql-download">.sql</button>
+        <button class="btn primary" data-act="sql-copy" id="sql-copy">Copy</button>
+      </div>
+      <ul class="warnings" id="warnings" hidden></ul>
+      <pre class="output sql" id="sql"></pre>
+    </section>
+  </div>
+</main>
+
+<div class="pop" id="colpop" hidden role="dialog" aria-labelledby="pop-title">
+  <div class="pop-head">
+    <span id="pop-title">Column</span>
+    <button type="button" class="x" data-act="pop-close" title="Close (Esc)">×</button>
+  </div>
+  <label class="f">Name <input id="pc-name" spellcheck="false" autocomplete="off"></label>
+  <div class="row3">
+    <label class="f grow">Type
+      <select id="pc-type">
+        <option value="">auto — from the data</option>
+        <optgroup label="Numbers">
+          <option value="int">INT</option>
+          <option value="bigint">BIGINT</option>
+          <option value="smallint">SMALLINT</option>
+          <option value="decimal">DECIMAL (exact)</option>
+          <option value="float">FLOAT / DOUBLE</option>
+        </optgroup>
+        <optgroup label="Text">
+          <option value="varchar">VARCHAR</option>
+          <option value="char">CHAR</option>
+          <option value="text">TEXT</option>
+          <option value="uuid">UUID</option>
+          <option value="json">JSON</option>
+        </optgroup>
+        <optgroup label="Date and time">
+          <option value="date">DATE</option>
+          <option value="time">TIME</option>
+          <option value="datetime">DATETIME / TIMESTAMP</option>
+        </optgroup>
+        <optgroup label="Other">
+          <option value="bool">BOOLEAN</option>
+          <option value="blob">BLOB (binary)</option>
+        </optgroup>
+      </select>
+    </label>
+    <label class="f num" id="pc-len-wrap"><span id="pc-len-label">Length</span>
+      <input id="pc-len" type="number" min="0" max="65535" placeholder="auto">
+    </label>
+    <label class="f num" id="pc-scale-wrap">Scale
+      <input id="pc-scale" type="number" min="0" max="65" placeholder="0">
+    </label>
+  </div>
+  <div class="flags">
+    <label class="check"><input type="checkbox" id="pc-pk"> Primary key</label>
+    <label class="check"><input type="checkbox" id="pc-ai"> Auto increment</label>
+    <label class="check"><input type="checkbox" id="pc-nn"> NOT NULL</label>
+    <label class="check"><input type="checkbox" id="pc-uq"> Unique</label>
+  </div>
+  <label class="f">Default
+    <input id="pc-def" spellcheck="false" autocomplete="off" placeholder="none · 0 · text · CURRENT_TIMESTAMP">
+  </label>
+  <label class="f">Comment <input id="pc-comment" autocomplete="off"></label>
+  <div class="pop-foot">
+    <span class="dim" id="pc-sqltype"></span>
+    <button type="button" class="btn" data-act="pop-reset" title="Back to auto type, no flags">Reset</button>
+  </div>
+</div>
+
+<dialog class="dlg" id="sql-dlg" aria-labelledby="sql-dlg-title">
+  <form method="dialog" class="dlg-body">
+    <div class="dlg-head">
+      <h2 id="sql-dlg-title">Import SQL</h2>
+      <span class="dim">CREATE TABLE, INSERT, a mysqldump / pg_dump / SSMS / sqlite .dump script, or DESCRIBE output</span>
+    </div>
+    <textarea id="sql-in" spellcheck="false" placeholder="CREATE TABLE users (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(100) NOT NULL
+);
+INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob');"></textarea>
+    <div class="dlg-foot">
+      <span class="status error" id="sql-dlg-error"></span>
+      <span class="spacer"></span>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" type="button" data-act="sql-import-run">Load into the editor</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="drop" id="drop" hidden>
+  <div class="drop-box">Drop the file to load it as a table</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

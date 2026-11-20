@@ -1,0 +1,58 @@
+GO      ?= go
+VERSION := $(shell cat VERSION)
+COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE    := $(shell date -u +%Y-%m-%d)
+
+BINARY  := sql-table-generator
+PREFIX  ?= /usr/local
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
+BUILD   := CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)"
+
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+
+.PHONY: build install test lint dist screenshot clean version help
+
+## build:   compile bin/sql-table-generator
+build:
+	$(BUILD) -o bin/$(BINARY) .
+
+## install: build and copy to $(PREFIX)/bin
+install: build
+	install -m 0755 bin/$(BINARY) $(PREFIX)/bin/$(BINARY)
+
+## test:    run unit tests
+test:
+	$(GO) test ./...
+
+## lint:    go vet and gofmt check
+lint:
+	$(GO) vet ./...
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+## dist:    release binaries for all platforms in dist/
+dist:
+	@for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; ext=; [ $$os = windows ] && ext=.exe; \
+		out=dist/$(BINARY)-v$(VERSION)-$$os-$$arch$$ext; echo $$out; \
+		GOOS=$$os GOARCH=$$arch $(BUILD) -o $$out . || exit 1; \
+	done
+
+## screenshot: refresh docs/screenshot.png (needs Node.js with playwright and Chromium)
+screenshot: build
+	@bin/$(BINARY) -addr 127.0.0.1:18089 & pid=$$!; sleep 1; \
+	node docs/screenshot.js http://127.0.0.1:18089 docs/screenshot.png; s=$$?; \
+	kill $$pid; exit $$s
+
+## clean:   remove build output
+clean:
+	rm -f bin/$(BINARY) dist/$(BINARY)-*
+
+## version: print version info
+version:
+	@echo "Version : $(VERSION)"
+	@echo "Commit  : $(COMMIT)"
+	@echo "Date    : $(DATE)"
+
+## help:    list targets
+help:
+	@grep -E '^## ' Makefile | sed 's/## /  /'

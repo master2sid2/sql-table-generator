@@ -1,0 +1,8 @@
+PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, done BOOLEAN DEFAULT 0, created DATETIME DEFAULT (datetime('now')));
+INSERT INTO notes VALUES(1,'first',0,'2024-01-01 00:00:00');
+INSERT INTO notes VALUES(2,'it''s done',1,'2024-01-02 00:00:00');
+DELETE FROM sqlite_sequence;
+INSERT INTO sqlite_sequence VALUES('notes',2);
+COMMIT;
